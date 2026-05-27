@@ -41,6 +41,7 @@ OPTIMAL_A_LEGH_KNEE = 0.5
 OPTIMAL_PHASE_LAG = -np.pi / 20 * 1
 
 # 仿真参数
+INITIAL_PHASE_OFFSET = 0.53 / F
 TOTAL_TIME = 5
 HIGH_LEVEL_FREQ = 240
 HIGH_LEVEL_DT = 1.0 / HIGH_LEVEL_FREQ
@@ -53,11 +54,11 @@ VIEWER_HEIGHT = 800
 # 接触力分析参数
 ANALYSIS_START_TIME = 0
 ANALYSIS_END_TIME = 5
-IMPULSE_START = ANALYSIS_START_TIME + 0.12
+IMPULSE_START = ANALYSIS_START_TIME + 0.1
 IMPULSE_END = ANALYSIS_START_TIME + 0.2
 
 # 数据记录参数
-SAVE_DATA = True
+SAVE_DATA = False
 
 
 # ==================== 轨迹生成函数 ====================
@@ -93,7 +94,7 @@ def get_all_joint_targets(t, sin_params, num_joints):
 
 
 # PD控制器
-def PDcontrol(target_pos, target_vel, current_pos, current_vel, joint_indices=None):
+def PDcontrol(target_pos, target_vel, current_pos, current_vel):
     pos_error = target_pos - current_pos
     vel_error = target_vel - current_vel
     torque = KP * pos_error + KD * vel_error
@@ -119,26 +120,16 @@ def get_contact_force(sim, geom_name):
         contact = sim.data.contact[i]
 
         if contact.geom1 == geom_id or contact.geom2 == geom_id:
-            # 获取6维接触力 [法向力, 切向力1, 切向力2, 力矩x, 力矩y, 力矩z]
             force_in_contact_frame = np.zeros(6)
             mujoco_py.functions.mj_contactForce(sim.model, sim.data, i, force_in_contact_frame)
 
-            # contact.frame 是3x3旋转矩阵
-            # 第0列: 法向方向 (世界坐标)
-            # 第1列: 第一切向 (世界坐标)  
-            # 第2列: 第二切向 (世界坐标)
             contact_frame = contact.frame.reshape(3, 3)
-
-            # 将三个力分量都转换到世界坐标系
             normal_force = contact_frame[:, 0] * force_in_contact_frame[0]
             tangential_force1 = contact_frame[:, 1] * force_in_contact_frame[1]
             tangential_force2 = contact_frame[:, 2] * force_in_contact_frame[2]
 
-            # 合成总接触力
             force = normal_force + tangential_force1 + tangential_force2
 
-            # 方向修正：接触力定义在geom2作用于geom1
-            # 如果目标几何体是geom1，需要取反
             if contact.geom1 == geom_id:
                 force = -force
 
@@ -161,23 +152,13 @@ def generate_csv_filename():
 # ==================== 主仿真函数 ====================
 # 运行带可视化界面的单次仿真
 def run_single_simulation_with_viewer(save_data=True):
-    print("=" * 60)
-    print("单次仿真 - 使用最优参数（带可视化界面和XZ方向力分析）")
+    print("单次仿真 - 使用最优参数")
     print(f"a_legH_hip = {OPTIMAL_A_LEGH_HIP}")
     print(f"a_legH_knee = {OPTIMAL_A_LEGH_KNEE}")
     print(f"phase_lag = {OPTIMAL_PHASE_LAG:.4f} (≈{OPTIMAL_PHASE_LAG/np.pi:.2f}π)")
-    print(f"仿真时间: {TOTAL_TIME} 秒")
-    print(f"接触力分析时段: {ANALYSIS_START_TIME}-{ANALYSIS_END_TIME} 秒")
-    print("=" * 60)
-    print("\n可视化控制说明:")
-    print("  - 鼠标左键拖动: 旋转视角")
-    print("  - 鼠标右键拖动: 平移视角")
-    print("  - 滚动滚轮: 缩放")
-    print("  - 按 'ESC' 或关闭窗口退出仿真")
-    print("=" * 60)
+    print("=" * 50)
 
     # 加载模型
-    print("\n加载模型中...")
     model = mujoco_py.load_model_from_path(MODEL_PATH)
     sim = mujoco_py.MjSim(model)
 
@@ -209,61 +190,40 @@ def run_single_simulation_with_viewer(save_data=True):
     # 初始化数据记录器
     data_logger = DataLogger(JOINT_NAMES)
 
-    # 打印参数信息
-    print("\nSin轨迹参数设置:")
-    print("-" * 70)
-    print(f"{'关节名称':<20} {'振幅A':<8} {'频率f':<8} {'相位':<10} {'偏置A0':<8}")
-    print("-" * 70)
-    for i, name in enumerate(JOINT_NAMES):
-        print(f"{name:<20} {sin_params[i,0]:<8.2f} {sin_params[i,1]:<8.2f} "
-              f"{sin_params[i,2]:<10.4f} {sin_params[i,3]:<8.2f}")
-    print("=" * 70)
-
     # 查找hindleg_3相关几何体
-    print("\n查找hindleg_3相关几何体...")
     hindleg_3_geom_names = []
     for i in range(model.ngeom):
         geom_name = model.geom_id2name(i)
         if geom_name and 'hindleg_3' in geom_name.lower():
             hindleg_3_geom_names.append(geom_name)
-            print(f"  找到几何体: {geom_name}")
 
     if not hindleg_3_geom_names:
-        print("警告: 未找到与 'hindleg_3' 相关的几何体")
-        print("可用的几何体名称:")
-        for i in range(model.ngeom):
-            geom_name = model.geom_id2name(i)
-            if geom_name:
-                print(f"  {geom_name}")
-        print("\n尝试使用几何体名称 'hindleg_3_geom'")
         hindleg_3_geom_names = ['hindleg_3_geom']
 
     # 运行仿真
-    print("\n开始仿真 - 可视化窗口已打开...")
-    print("正在监测接触力数据（重点关注X和Z方向）...")
     current_time = 0.0
     last_high_level_time = 0.0
     num_joints = len(JOINT_NAMES)
 
-    high_level_target_pos, high_level_target_vel = get_all_joint_targets(0, sin_params, num_joints)
+    high_level_target_pos, high_level_target_vel = get_all_joint_targets(
+        INITIAL_PHASE_OFFSET, sin_params, num_joints
+    )
 
-    # 仿真循环
     sim_step = 0
     start_time = time.time()
-    last_print_time = 0
     force_record_interval = int(0.001 / dt)
 
     try:
         while current_time < TOTAL_TIME:
-            # 获取当前状态
             current_pos = sim.data.qpos[joint_pos_ids].copy()
             current_vel = sim.data.qvel[joint_vel_ids].copy()
 
             # 高层控制更新
             if current_time - last_high_level_time >= HIGH_LEVEL_DT - 1e-9 or current_time == 0:
                 last_high_level_time = current_time
+                trajectory_time = current_time + INITIAL_PHASE_OFFSET
                 high_level_target_pos, high_level_target_vel = get_all_joint_targets(
-                    current_time, sin_params, num_joints
+                    trajectory_time, sin_params, num_joints
                 )
                 data_logger.record_high_level_data(
                     current_time, high_level_target_pos, current_pos, current_vel
@@ -274,7 +234,7 @@ def run_single_simulation_with_viewer(save_data=True):
             for i in range(min(len(torque), sim.model.nu)):
                 sim.data.ctrl[i] = torque[i]
 
-            # 记录力矩和基座位置
+            # 记录数据
             data_logger.record_torque_data(current_time, torque)
 
             current_base_x = sim.data.body_xpos[base_link_id][0]
@@ -286,36 +246,21 @@ def run_single_simulation_with_viewer(save_data=True):
                     try:
                         force, force_mag = get_contact_force(sim, geom_name)
                         data_logger.record_contact_force(geom_name, current_time, force, force_mag)
-                    except Exception as e:
-                        print(f"  获取接触力时出错 ({geom_name}): {e}")
+                    except Exception:
+                        pass
 
             # 渲染
             if sim_step % RENDER_EVERY == 0:
                 viewer.render()
 
-            # 仿真步进
             sim.step()
             current_time += dt
             sim_step += 1
 
-            # 打印进度
-            if current_time - last_print_time >= 1.0:
-                progress = current_time / TOTAL_TIME * 100
-                latest_forces = {}
-                for geom_name in hindleg_3_geom_names:
-                    forces = data_logger.contact_forces.get(geom_name, {})
-                    if forces.get('magnitude'):
-                        latest_forces[geom_name] = forces['magnitude'][-1]
-
-                force_str = ", ".join([f"{name}: {force:.2f}N" for name, force in latest_forces.items()])
-                print(f"  进度: {progress:.1f}% | 时间: {current_time:.1f}s | "
-                      f"位置: {current_base_x:.3f}m | 接触力 - {force_str}")
-                last_print_time = current_time
-
     except KeyboardInterrupt:
-        print("\n\n用户中断仿真")
+        print("\n用户中断仿真")
     except Exception as e:
-        print(f"\n\n仿真出错: {e}")
+        print(f"\n仿真出错: {e}")
         import traceback
         traceback.print_exc()
 
@@ -325,26 +270,18 @@ def run_single_simulation_with_viewer(save_data=True):
     avg_velocity = data_logger.calculate_average_velocity(1.0, 4.0)
 
     # 打印结果
-    print("\n" + "=" * 60)
-    print("仿真完成！")
-    print("=" * 60)
-    print(f"仿真参数:")
-    print(f"  总仿真时间: {TOTAL_TIME:.1f} 秒")
-    print(f"  仿真步数: {sim_step}")
-    print(f"  实际计算时间: {elapsed_time:.2f} 秒")
-    print(f"  仿真/实时比: {TOTAL_TIME/elapsed_time:.1f}x")
-    print("-" * 60)
-    print(f"运动结果:")
-    print(f"  总前进距离: {data_logger.get_total_distance():.4f} 米")
-    print(f"  平均速度 (1s-4s): {avg_velocity:.4f} 米/秒")
-    print("=" * 60)
+    print("\n" + "=" * 50)
+    print("仿真完成")
+    print(f"总前进距离: {data_logger.get_total_distance():.4f} m")
+    print(f"平均速度 (1s-4s): {avg_velocity:.4f} m/s")
+    print(f"仿真耗时: {elapsed_time:.2f} s")
+    print("=" * 50)
 
     # 保存数据
     if save_data:
         csv_filename = generate_csv_filename()
-        print(f"\n保存仿真数据到文件: {csv_filename}")
+        print(f"数据已保存: {csv_filename}")
         data_logger.save_to_csv(csv_filename)
-        print("数据保存完成！")
 
     return avg_velocity, data_logger
 
@@ -354,9 +291,7 @@ if __name__ == '__main__':
     avg_speed, data_logger = run_single_simulation_with_viewer(save_data=SAVE_DATA)
 
     print(f"\n最终结果: 平均速度 = {avg_speed:.4f} m/s")
-    print("\n可视化窗口已关闭。")
 
-    # 启动数据可视化
     print("\n正在启动数据可视化界面...")
     show_visualization(data_logger, JOINT_NAMES, OPTIMAL_PHASE_LAG, TOTAL_TIME,
                       ANALYSIS_START_TIME, ANALYSIS_END_TIME, IMPULSE_START, IMPULSE_END, avg_speed)
