@@ -335,7 +335,6 @@ class VisualizationController:
             print("\n" + "=" * 50)
             print("冲量分析结果")
             print("=" * 50)
-            print(f"区间持续时间: {self.impulse_end - self.impulse_start:.4f}s")
             print(f"平均速度: {self.avg_velocity:.4f} m/s")
             print(f"冲量计算区间: {self.impulse_start:.2f}s - {self.impulse_end:.2f}s")
             print(f"Ix (水平): {impulse_x:.6f} N·s")
