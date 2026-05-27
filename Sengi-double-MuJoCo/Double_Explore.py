@@ -17,7 +17,7 @@ warnings.filterwarnings('ignore')
 
 # ==================== 配置参数 ====================
 # 模型路径
-MODEL_PATH = r"D:\Code\Model\Sengi\Sengi-video.xml"
+MODEL_PATH = r"D:\Code\Model\Sengi\Sengi.xml"
 
 # 数据保存路径
 CSV_DATA_DIR = r"D:\Code\Sengi-MuJoCo\Sengi-double-MuJoCo\Data_Explore"
@@ -41,6 +41,7 @@ A_SPINE = -0.5
 A_LEGF_HIP = -0.25
 
 # 仿真参数
+INITIAL_PHASE_OFFSET = 0.53 / F  
 TOTAL_TIME = 4.0
 HIGH_LEVEL_FREQ = 240
 HIGH_LEVEL_DT = 1.0 / HIGH_LEVEL_FREQ
@@ -141,10 +142,11 @@ def run_single_simulation(args):
         # 创建Sin参数矩阵
         sin_params = create_sin_params(a_hip_h, a_knee_h, phase_lag)
 
-        # 记录质心位置
+        # 记录数据
         base_x_positions = []
         base_z_positions = []
         times = []
+        max_pitch_abs = 0.0  # 记录最大绝对俯仰角
 
         # 运行仿真
         current_time = 0.0
@@ -154,16 +156,24 @@ def run_single_simulation(args):
         high_level_target_pos, high_level_target_vel = get_all_joint_targets(0, sin_params, num_joints)
 
         while current_time < TOTAL_TIME:
-            # 获取当前状态
             current_pos = sim.data.qpos[joint_pos_ids].copy()
             current_vel = sim.data.qvel[joint_vel_ids].copy()
 
             # 高层控制更新
             if current_time - last_high_level_time >= HIGH_LEVEL_DT - 1e-9 or current_time == 0:
                 last_high_level_time = current_time
+                trajectory_time = current_time + INITIAL_PHASE_OFFSET
                 high_level_target_pos, high_level_target_vel = get_all_joint_targets(
-                    current_time, sin_params, num_joints
+                    trajectory_time, sin_params, num_joints
                 )
+
+                # 获取俯仰角并更新最大值
+                base_rotmat = sim.data.body_xmat[base_link_id].reshape(3, 3)
+                pitch = np.arctan2(-base_rotmat[2, 0], 
+                                   np.sqrt(base_rotmat[0, 0]**2 + base_rotmat[1, 0]**2))
+                pitch_abs = abs(np.degrees(pitch))
+                if pitch_abs > max_pitch_abs:
+                    max_pitch_abs = pitch_abs
 
             # 应用PD控制
             torque = PDcontrol(high_level_target_pos, high_level_target_vel, current_pos, current_vel)
@@ -177,7 +187,6 @@ def run_single_simulation(args):
             base_z_positions.append(current_base_z)
             times.append(current_time)
 
-            # 仿真步进
             sim.step()
             current_time += dt
 
@@ -194,7 +203,6 @@ def run_single_simulation(args):
         else:
             avg_velocity = 0.0
 
-        # 计算Z轴最大值
         max_height = max(base_z_positions) if base_z_positions else 0.0
 
         return {
@@ -203,6 +211,7 @@ def run_single_simulation(args):
             'phase_lag': phase_lag,
             'avg_velocity': avg_velocity,
             'max_height': max_height,
+            'max_pitch': max_pitch_abs,
             'success': True,
             'index': idx
         }
@@ -214,10 +223,11 @@ def run_single_simulation(args):
             'phase_lag': phase_lag,
             'avg_velocity': 0.0,
             'max_height': 0.0,
+            'max_pitch': 180.0,
             'success': False,
             'index': idx
         }
-
+    
 
 # ==================== 主程序入口 ====================
 if __name__ == '__main__':
@@ -280,12 +290,17 @@ if __name__ == '__main__':
     # 过滤成功的结果
     results = [r for r in all_results if r['success']]
 
+    # 筛选俯仰角不超过75°
+    PITCH_LIMIT = 75.0
+    results_filtered = [r for r in results if r['max_pitch'] <= PITCH_LIMIT]
+    filtered_count = len(results) - len(results_filtered)
+
     # 计算耗时
     elapsed_time = time.time() - start_time
 
     # 保存结果
     if results:
-        df_results = pd.DataFrame(results)
+        df_results = pd.DataFrame(results_filtered)
 
         if 'index' in df_results.columns:
             df_results = df_results.drop('index', axis=1)
@@ -297,11 +312,8 @@ if __name__ == '__main__':
         df_results.to_csv(output_filename, index=False)
 
         print("\n" + "=" * 60)
-        print(f"搜索完成!")
-        print(f"固定线程数: {FIXED_NUM_THREADS}")
         print(f"总耗时: {elapsed_time:.2f} 秒")
         print(f"成功完成的仿真数: {len(results)}/{total_combinations}")
-        print(f"成功率: {len(results)/total_combinations*100:.1f}%")
         print(f"结果已保存到: {output_filename}")
         print("=" * 60)
 
@@ -310,31 +322,6 @@ if __name__ == '__main__':
         print("按速度排序的前10名最佳参数组合:")
         pd.set_option('display.float_format', '{:.4f}'.format)
         print(df_results_sorted_by_speed.head(10).to_string(index=False))
-
-        # 统计信息
-        print("\n" + "=" * 60)
-        print("统计信息:")
-        print(f"速度 - 最大: {df_results['avg_velocity'].max():.4f} m/s")
-        print(f"速度 - 最小: {df_results['avg_velocity'].min():.4f} m/s")
-        print(f"速度 - 平均: {df_results['avg_velocity'].mean():.4f} m/s")
-        print(f"速度 - 中位数: {df_results['avg_velocity'].median():.4f} m/s")
-        print(f"速度 - 标准差: {df_results['avg_velocity'].std():.4f} m/s")
-        print(f"\n高度 - 最大: {df_results['max_height'].max():.4f} m")
-        print(f"高度 - 最小: {df_results['max_height'].min():.4f} m")
-        print(f"高度 - 平均: {df_results['max_height'].mean():.4f} m")
-        print(f"高度 - 中位数: {df_results['max_height'].median():.4f} m")
-
-        # 参数相关性分析
-        print("\n" + "=" * 60)
-        print("参数与速度的相关性:")
-        for param in ['a_legH_hip', 'a_legH_knee', 'phase_lag']:
-            correlation = df_results[param].corr(df_results['avg_velocity'])
-            print(f"  {param} 与速度的相关系数: {correlation:.4f}")
-
-        print("\n参数与高度的相关性:")
-        for param in ['a_legH_hip', 'a_legH_knee', 'phase_lag']:
-            correlation = df_results[param].corr(df_results['max_height'])
-            print(f"  {param} 与高度的相关系数: {correlation:.4f}")
 
         # 性能统计
         print("\n" + "=" * 60)
