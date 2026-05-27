@@ -7,7 +7,7 @@ friction="1 0.01 0.01" solref="0.005 1"
 <body name="base_link" pos="0 0 0.10">
 
 参数搜索
-TOR = 0.5
+TOR = 0.4
 TOR_SPINE = TOR*1.5
 
 仿真

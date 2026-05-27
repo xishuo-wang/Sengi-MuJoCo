@@ -25,6 +25,6 @@ def calculate_total_mass(xml_file):
     return total_mass
 
 # 使用示例
-xml_file = r"D:\Code\Model\Sengi\Sengi.xml" # 替换为你的 XML 文件路径
+xml_file = r"D:\Code\Model\Sengi_simple_single\Sengi_simple_single.xml" # 替换为你的 XML 文件路径
 total_mass = calculate_total_mass(xml_file)
 print(f"Total mass of all parts: {total_mass} kg")

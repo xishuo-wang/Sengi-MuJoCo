@@ -20,7 +20,7 @@ warnings.filterwarnings('ignore')
 MODEL_PATH = r"D:\Code\Model\Sengi_simple_single\Sengi_simple_single.xml"
 
 # 数据保存路径
-CSV_DATA_DIR = r"D:\Code\Sengi-MuJoCo\Sengi-single-MuJoCo\Data_Explore"
+CSV_DATA_DIR = r"D:\Code\Sengi-MuJoCo\Sengi-single_MuJoCo\Data_Explore"
 CSV_DATA_PREFIX = "Explore_Data"
 
 # 关节名称列表
@@ -32,8 +32,8 @@ JOINT_NAMES = [
 # PD控制器参数
 KP = 2
 KD = 0.1
-TOR = 0.5
-TOR_SPINE = 0.5
+TOR = 0.4
+TOR_SPINE = 0.4
 
 # 固定运动参数
 F = 3
