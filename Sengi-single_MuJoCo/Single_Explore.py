@@ -1,0 +1,359 @@
+"""
+批量参数搜索脚本 - 搜索腿部运动参数对速度和高度的影响 (固定线程数并行版本)
+搜索参数: a_legH_hip, a_legH_knee, phase_lag
+"""
+
+import mujoco_py
+import numpy as np
+import pandas as pd
+import time
+import os
+from itertools import product
+from tqdm import tqdm
+import multiprocessing as mp
+from functools import partial
+import warnings
+warnings.filterwarnings('ignore')
+
+# ==================== 全局配置参数 ====================
+# 模型路径
+MODEL_PATH = r"D:\Code\Model\Sengi_simple_single\Sengi_simple_single.xml"
+
+# 定义关节名称列表（全局常量）
+JOINT_NAMES = [
+    "spine_hind_joint", "hindleg_1_joint", "hindleg_2_joint", "hindleg_3_joint",
+    "foreleg_1_joint", "foreleg_2_joint", "foreleg_3_joint"
+]
+
+# PD控制器参数
+KP = 2
+KD = 0.1
+TOR = 0.5
+TOR_SPINE = 0.5*1.5
+
+# 固定运动参数
+F = 3
+A_SPINE = -0.5
+A_LEGF_HIP = -0.25  # 前腿髋关节振幅固定
+
+# 仿真参数
+TOTAL_TIME = 4.0  # 总仿真时间
+HIGH_LEVEL_FREQ = 240  # Hz
+HIGH_LEVEL_DT = 1.0 / HIGH_LEVEL_FREQ
+
+# ==================== 固定线程数配置 ====================
+FIXED_NUM_THREADS = 8  # 可以根据需要修改
+
+# ==================== 参数搜索范围 ====================
+A_LEGH_HIP_RANGE = np.arange(0, 1.41, 0.1)        # 0:0.1:1.0
+A_LEGH_KNEE_RANGE = np.arange(0, 1.01, 0.1)       # 0:0.1:1.0
+PHASE_LAG_RANGE = np.arange(-np.pi, np.pi + np.pi/20, np.pi/20)  # -pi:pi/20:pi
+
+# ==================== 工具函数 ====================
+def create_sin_params(a_legH_hip, a_legH_knee, phase_lag):
+    """
+    根据给定参数创建Sin轨迹参数矩阵
+    保持其他参数不变
+    """
+    sin_params = np.array([
+        [A_SPINE, F, 0.0, 0.0],                                    # back_joint
+        [a_legH_hip, F, phase_lag, -0.6 + 0.7 * a_legH_hip],      # hindleg_joint_1
+        [a_legH_knee, F, phase_lag, -1.5],                         # hindleg_joint_2
+        [a_legH_knee, F, phase_lag, -1.5],                         # hindleg_joint_3
+        [A_LEGF_HIP, F, 0.0, -0.6 + A_LEGF_HIP],                  # foreleg_joint_1
+        [0., F, 0.0, -1.0],                                        # foreleg_joint_2
+        [0., F, 0.0, -1.0],                                        # foreleg_joint_3
+    ])
+    return sin_params
+
+def get_sin_trajectory(t, params):
+    """Sin轨迹生成函数"""
+    A = params[0]
+    f = params[1]
+    phase = params[2]
+    A0 = params[3]
+    
+    pos = A * np.sin(2 * np.pi * f * t + phase) + A0
+    vel = A * 2 * np.pi * f * np.cos(2 * np.pi * f * t + phase)
+    
+    return pos, vel
+
+def get_all_joint_targets(t, sin_params, num_joints):
+    """批量生成所有关节的Sin轨迹"""
+    target_pos = np.zeros(num_joints)
+    target_vel = np.zeros(num_joints)
+    
+    for i in range(num_joints):
+        target_pos[i], target_vel[i] = get_sin_trajectory(t, sin_params[i])
+    
+    return target_pos, target_vel
+
+def PDcontrol(target_pos, target_vel, current_pos, current_vel, joint_indices=None):
+    """PD控制器 - 支持不同关节的不同力矩限制"""
+    pos_error = target_pos - current_pos
+    vel_error = target_vel - current_vel
+    torque = KP * pos_error + KD * vel_error
+    
+    # 为不同关节设置不同的力矩限制
+    num_joints = len(torque)
+    torque_limits = np.ones(num_joints) * TOR  # 默认力矩限制
+    
+    # 为back_joint和front_joint设置特殊力矩限制
+    back_joint_idx = JOINT_NAMES.index("spine_hind_joint")  # 0
+    
+    torque_limits[back_joint_idx] = TOR_SPINE
+    
+    # 应用不同的力矩限制
+    torque = np.clip(torque, -torque_limits, torque_limits)
+    
+    return torque
+
+# ==================== 单次仿真函数（独立运行） ====================
+def run_single_simulation(args):
+    """
+    运行单次仿真，供并行处理调用
+    
+    Args:
+        args: 包含参数组合的元组 (a_hip_h, a_knee_h, phase_lag, index)
+    
+    Returns:
+        dict: 包含参数和仿真结果的字典
+    """
+    a_hip_h, a_knee_h, phase_lag, idx = args
+    
+    try:
+        # 在每个进程中重新加载模型
+        model = mujoco_py.load_model_from_path(MODEL_PATH)
+        sim = mujoco_py.MjSim(model)
+        
+        # 获取关节ID
+        joint_pos_ids = []
+        joint_vel_ids = []
+        
+        for name in JOINT_NAMES:
+            joint_id = model.joint_name2id(name)
+            joint_pos_ids.append(model.jnt_qposadr[joint_id])
+            joint_vel_ids.append(model.jnt_dofadr[joint_id])
+        
+        base_link_id = model.body_name2id('base_link')
+        dt = model.opt.timestep
+        
+        # 设置初始关节位置
+        initial_joint_pos = np.array([0, -0.5, -1.2, -1.2, -0.5, -1.2, -1.2])
+        sim.data.qpos[joint_pos_ids] = initial_joint_pos
+        
+        # 创建Sin参数矩阵
+        sin_params = create_sin_params(a_hip_h, a_knee_h, phase_lag)
+        
+        # 记录质心位置
+        base_x_positions = []
+        base_z_positions = []
+        times = []
+        
+        # 运行仿真
+        current_time = 0.0
+        last_high_level_time = 0.0
+        num_joints = len(JOINT_NAMES)
+        
+        # 初始化目标位置
+        high_level_target_pos, high_level_target_vel = get_all_joint_targets(0, sin_params, num_joints)
+        
+        while current_time < TOTAL_TIME:
+            # 获取当前状态
+            current_pos = sim.data.qpos[joint_pos_ids].copy()
+            current_vel = sim.data.qvel[joint_vel_ids].copy()
+            
+            # 高层控制更新
+            if current_time - last_high_level_time >= HIGH_LEVEL_DT - 1e-9 or current_time == 0:
+                last_high_level_time = current_time
+                high_level_target_pos, high_level_target_vel = get_all_joint_targets(current_time, sin_params, num_joints)
+            
+            # 应用PD控制
+            torque = PDcontrol(high_level_target_pos, high_level_target_vel, current_pos, current_vel)
+            for i in range(min(len(torque), sim.model.nu)):
+                sim.data.ctrl[i] = torque[i]
+            
+            # 记录基座位置
+            current_base_x = sim.data.body_xpos[base_link_id][0]
+            current_base_z = sim.data.body_xpos[base_link_id][2]
+            base_x_positions.append(current_base_x)
+            base_z_positions.append(current_base_z)
+            times.append(current_time)
+            
+            # 仿真步进
+            sim.step()
+            current_time += dt
+        
+        # 计算平均速度（从1s到4s）
+        if len(times) > 1:
+            idx_1s = np.argmin(np.abs(np.array(times) - 1.0))
+            idx_4s = np.argmin(np.abs(np.array(times) - 4.0))
+            
+            pos_1s = base_x_positions[idx_1s]
+            pos_4s = base_x_positions[idx_4s]
+            time_diff = times[idx_4s] - times[idx_1s]
+            
+            avg_velocity = (pos_4s - pos_1s) / time_diff if time_diff > 0 else 0.0
+        else:
+            avg_velocity = 0.0
+        
+        # 计算Z轴最大值
+        max_height = max(base_z_positions) if base_z_positions else 0.0
+        
+        return {
+            'a_legH_hip': a_hip_h,
+            'a_legH_knee': a_knee_h,
+            'phase_lag': phase_lag,
+            'avg_velocity': avg_velocity,
+            'max_height': max_height,
+            'success': True,
+            'index': idx
+        }
+        
+    except Exception as e:
+        # 不打印每个错误，避免干扰进度条
+        return {
+            'a_legH_hip': a_hip_h,
+            'a_legH_knee': a_knee_h,
+            'phase_lag': phase_lag,
+            'avg_velocity': 0.0,
+            'max_height': 0.0,
+            'success': False,
+            'index': idx
+        }
+
+# ==================== 主程序入口 ====================
+if __name__ == '__main__':
+    # 在Windows上需要调用此函数
+    mp.freeze_support()
+    
+    # 预计算所有参数组合
+    param_combinations = list(product(A_LEGH_HIP_RANGE, A_LEGH_KNEE_RANGE, PHASE_LAG_RANGE))
+    total_combinations = len(param_combinations)
+    
+    print("=" * 60)
+    print("参数搜索范围:")
+    print(f"a_legH_hip: {len(A_LEGH_HIP_RANGE)}个值, 范围: [{A_LEGH_HIP_RANGE[0]:.2f}, {A_LEGH_HIP_RANGE[-1]:.2f}]")
+    print(f"a_legH_knee: {len(A_LEGH_KNEE_RANGE)}个值, 范围: [{A_LEGH_KNEE_RANGE[0]:.2f}, {A_LEGH_KNEE_RANGE[-1]:.2f}]")
+    print(f"phase_lag: {len(PHASE_LAG_RANGE)}个值, 范围: [{PHASE_LAG_RANGE[0]:.2f}, {PHASE_LAG_RANGE[-1]:.2f}]")
+    print(f"总计参数组合: {total_combinations}")
+    
+    # 检查系统CPU核心数
+    cpu_count = mp.cpu_count()
+    print(f"系统CPU核心数: {cpu_count}")
+    print(f"固定使用线程数: {FIXED_NUM_THREADS}")
+    
+    if FIXED_NUM_THREADS > cpu_count:
+        print(f"警告: 设置的线程数({FIXED_NUM_THREADS})超过CPU核心数({cpu_count})，可能影响性能")
+        response = input("是否继续? (y/n): ")
+        if response.lower() != 'y':
+            exit()
+    
+    print("=" * 60)
+    print("\n开始参数搜索（固定线程数并行）...")
+    print("=" * 60)
+    
+    start_time = time.time()
+    
+    # 准备参数列表，添加索引以便追踪
+    param_list = [(a_hip_h, a_knee_h, phase_lag, i) 
+                  for i, (a_hip_h, a_knee_h, phase_lag) in enumerate(param_combinations)]
+    
+    # 创建进程池
+    pool = mp.Pool(processes=FIXED_NUM_THREADS)
+    
+    # 使用imap_unordered来实时显示进度
+    all_results = []
+    try:
+        # imap_unordered会立即开始返回结果，不保持顺序
+        with tqdm(total=total_combinations, desc="仿真进度", ncols=80) as pbar:
+            for result in pool.imap_unordered(run_single_simulation, param_list):
+                all_results.append(result)
+                pbar.update(1)
+                
+    except KeyboardInterrupt:
+        print("\n用户中断，正在终止进程...")
+        pool.terminate()
+        pool.join()
+        exit()
+    finally:
+        pool.close()
+        pool.join()
+    
+    # 按索引排序结果
+    all_results.sort(key=lambda x: x['index'])
+    
+    # 过滤出成功的结果
+    results = [r for r in all_results if r['success']]
+    
+    # 计算耗时
+    elapsed_time = time.time() - start_time
+    
+    # ==================== 保存结果 ====================
+    if results:
+        # 创建DataFrame
+        df_results = pd.DataFrame(results)
+        
+        # 删除index列
+        if 'index' in df_results.columns:
+            df_results = df_results.drop('index', axis=1)
+        
+        # 按速度排序
+        df_results_sorted_by_speed = df_results.sort_values('avg_velocity', ascending=False)
+        
+        
+        # 保存到CSV
+        timestamp = time.strftime('%Y%m%d_%H%M%S')
+        output_filename = f"parameter_search_results_fixed{FIXED_NUM_THREADS}threads_{timestamp}.csv"
+        df_results.to_csv(output_filename, index=False)
+        
+        
+        print("\n" + "=" * 60)
+        print(f"搜索完成!")
+        print(f"固定线程数: {FIXED_NUM_THREADS}")
+        print(f"总耗时: {elapsed_time:.2f} 秒")
+        print(f"成功完成的仿真数: {len(results)}/{total_combinations}")
+        print(f"成功率: {len(results)/total_combinations*100:.1f}%")
+        print(f"结果已保存到: {output_filename}")
+        print("=" * 60)
+        
+        # 显示最佳参数组合
+        print("\n" + "=" * 60)
+        print("按速度排序的前10名最佳参数组合:")
+        pd.set_option('display.float_format', '{:.4f}'.format)
+        print(df_results_sorted_by_speed.head(10).to_string(index=False))
+        
+        # 统计信息
+        print("\n" + "=" * 60)
+        print("统计信息:")
+        print(f"速度 - 最大: {df_results['avg_velocity'].max():.4f} m/s")
+        print(f"速度 - 最小: {df_results['avg_velocity'].min():.4f} m/s")
+        print(f"速度 - 平均: {df_results['avg_velocity'].mean():.4f} m/s")
+        print(f"速度 - 中位数: {df_results['avg_velocity'].median():.4f} m/s")
+        print(f"速度 - 标准差: {df_results['avg_velocity'].std():.4f} m/s")
+        print(f"\n高度 - 最大: {df_results['max_height'].max():.4f} m")
+        print(f"高度 - 最小: {df_results['max_height'].min():.4f} m")
+        print(f"高度 - 平均: {df_results['max_height'].mean():.4f} m")
+        print(f"高度 - 中位数: {df_results['max_height'].median():.4f} m")
+        
+        # 参数相关性分析
+        print("\n" + "=" * 60)
+        print("参数与速度的相关性:")
+        for param in ['a_legH_hip', 'a_legH_knee', 'phase_lag']:
+            correlation = df_results[param].corr(df_results['avg_velocity'])
+            print(f"  {param} 与速度的相关系数: {correlation:.4f}")
+        
+        print("\n参数与高度的相关性:")
+        for param in ['a_legH_hip', 'a_legH_knee', 'phase_lag']:
+            correlation = df_results[param].corr(df_results['max_height'])
+            print(f"  {param} 与高度的相关系数: {correlation:.4f}")
+        
+        # 性能统计
+        print("\n" + "=" * 60)
+        print("性能统计:")
+        print(f"平均每个仿真耗时: {elapsed_time/len(results):.3f} 秒")
+        print(f"平均每秒处理: {len(results)/elapsed_time:.1f} 个仿真")
+        
+        
+    else:
+        print("\n没有成功完成的仿真！")
