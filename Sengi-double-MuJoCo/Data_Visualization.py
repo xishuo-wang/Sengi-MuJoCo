@@ -12,7 +12,7 @@ import os
 
 # ==================== 配置参数 ====================
 # 数据文件路径
-CSV_DATA_FILE = "simulation_data.csv"
+CSV_DATA_FILE = r"D:\Code\Sengi-MuJoCo\Sengi-double-MuJoCo\Data_Locomotion\Simulation_Data_260527_1731.csv"
 
 # 可视化默认参数
 DEFAULT_PHASE_LAG = -np.pi / 20
