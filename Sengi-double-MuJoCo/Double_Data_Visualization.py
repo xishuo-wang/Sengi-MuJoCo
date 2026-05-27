@@ -327,13 +327,6 @@ class VisualizationController:
             impulse_z = np.sum(fz_mid * time_steps)
             impulse_magnitude = np.sqrt(impulse_x**2 + impulse_z**2)
 
-            # 计算标量和
-            fx_abs_mid = (np.abs(impulse_fx[:-1]) + np.abs(impulse_fx[1:])) / 2
-            fz_abs_mid = (np.abs(impulse_fz[:-1]) + np.abs(impulse_fz[1:])) / 2
-            impulse_x_scalar = np.sum(fx_abs_mid * time_steps)
-            impulse_z_scalar = np.sum(fz_abs_mid * time_steps)
-            impulse_xz_scalar = np.sqrt(impulse_x_scalar**2 + impulse_z_scalar**2)
-
             # 计算区间最大力
             max_fx = np.max(np.abs(impulse_fx))
             max_fz = np.max(np.abs(impulse_fz))
@@ -348,7 +341,6 @@ class VisualizationController:
             print(f"Ix (水平): {impulse_x:.6f} N·s")
             print(f"Iz (垂直): {impulse_z:.6f} N·s")
             print(f"|I| (矢量和): {impulse_magnitude:.6f} N·s")
-            print(f"Ixz (标量和): {impulse_xz_scalar:.6f} N·s")
             print(f"Fx区间最大力: {max_fx:.4f} N")
             print(f"Fz区间最大力: {max_fz:.4f} N")
             print(f"合力最大力: {max_fxz:.4f} N")
