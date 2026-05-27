@@ -4,7 +4,7 @@
 1、260527_1
 XML配置
 friction="1 0.01 0.01" solref="0.005 1"
-<body name="base_link" pos="0 0 0.10" quat="0 0 0.707107 0.707107">
+<body name="base_link" pos="0 0 0.10">
 
 参数搜索
 TOR = 0.5
