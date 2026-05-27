@@ -19,7 +19,7 @@ DEFAULT_PHASE_LAG = -np.pi / 20
 DEFAULT_TOTAL_TIME = 5.0
 DEFAULT_ANALYSIS_START_TIME = 0.0
 DEFAULT_ANALYSIS_END_TIME = 5.0
-DEFAULT_IMPULSE_START = 0.12
+DEFAULT_IMPULSE_START = 0.1
 DEFAULT_IMPULSE_END = 0.2
 
 # 关节名称列表
@@ -290,8 +290,71 @@ class VisualizationController:
             ha='center', fontsize=12, fontweight='bold'
         )
 
+        # 打印冲量分析结果
+        self.print_impulse_analysis()
+
         # 初始化显示
         self.update_plot()
+
+    # 打印冲量分析结果
+    def print_impulse_analysis(self):
+        if not self.data_logger.contact_forces:
+            print("无接触力数据，跳过冲量分析")
+            return
+
+        for geom_name, forces in self.data_logger.contact_forces.items():
+            if not forces['time']:
+                continue
+
+            times_array = np.array(forces['time'])
+            fx_array = -np.array(forces['fx'])
+            fz_array = -np.array(forces['fz'])
+
+            # 计算冲量
+            mask = (times_array >= self.impulse_start) & (times_array <= self.impulse_end)
+            if np.sum(mask) < 2:
+                continue
+
+            impulse_times = times_array[mask]
+            impulse_fx = fx_array[mask]
+            impulse_fz = fz_array[mask]
+
+            time_steps = np.diff(impulse_times)
+            fx_mid = (impulse_fx[:-1] + impulse_fx[1:]) / 2
+            fz_mid = (impulse_fz[:-1] + impulse_fz[1:]) / 2
+
+            impulse_x = np.sum(fx_mid * time_steps)
+            impulse_z = np.sum(fz_mid * time_steps)
+            impulse_magnitude = np.sqrt(impulse_x**2 + impulse_z**2)
+
+            # 计算标量和
+            fx_abs_mid = (np.abs(impulse_fx[:-1]) + np.abs(impulse_fx[1:])) / 2
+            fz_abs_mid = (np.abs(impulse_fz[:-1]) + np.abs(impulse_fz[1:])) / 2
+            impulse_x_scalar = np.sum(fx_abs_mid * time_steps)
+            impulse_z_scalar = np.sum(fz_abs_mid * time_steps)
+            impulse_xz_scalar = np.sqrt(impulse_x_scalar**2 + impulse_z_scalar**2)
+
+            # 计算区间最大力
+            max_fx = np.max(np.abs(impulse_fx))
+            max_fz = np.max(np.abs(impulse_fz))
+            max_fxz = np.max(np.sqrt(impulse_fx**2 + impulse_fz**2))
+
+            print("\n" + "=" * 50)
+            print("冲量分析结果")
+            print("=" * 50)
+            print(f"区间持续时间: {self.impulse_end - self.impulse_start:.4f}s")
+            print(f"平均速度: {self.avg_velocity:.4f} m/s")
+            print(f"冲量计算区间: {self.impulse_start:.2f}s - {self.impulse_end:.2f}s")
+            print(f"Ix (水平): {impulse_x:.6f} N·s")
+            print(f"Iz (垂直): {impulse_z:.6f} N·s")
+            print(f"|I| (矢量和): {impulse_magnitude:.6f} N·s")
+            print(f"Ixz (标量和): {impulse_xz_scalar:.6f} N·s")
+            print(f"Fx区间最大力: {max_fx:.4f} N")
+            print(f"Fz区间最大力: {max_fz:.4f} N")
+            print(f"合力最大力: {max_fxz:.4f} N")
+            print("=" * 50)
+
+            break
 
     # 清除所有子图（保留按钮）
     def clear_all_axes(self):
@@ -336,7 +399,6 @@ class VisualizationController:
         times = np.array(self.data_logger.base_times)
         positions = np.array(self.data_logger.base_x_positions)
 
-        # 计算速度
         if len(times) > 1:
             velocities = np.diff(positions) / np.diff(times)
             velocity_times = (times[:-1] + times[1:]) / 2
@@ -346,10 +408,8 @@ class VisualizationController:
 
         ax2 = ax.twinx()
 
-        # 绘制位置
         line1, = ax.plot(times, positions, 'b-', linewidth=2.5, label='X位置')
 
-        # 绘制速度
         if len(velocities) > 0:
             line2, = ax2.plot(velocity_times, velocities, 'r-', linewidth=1.5, alpha=0.7, label='速度')
 
@@ -362,7 +422,6 @@ class VisualizationController:
         ax.tick_params(axis='y', labelcolor='b')
         ax2.tick_params(axis='y', labelcolor='r')
 
-        # 统计信息
         total_distance = self.data_logger.get_total_distance()
         max_velocity = np.max(np.abs(velocities)) if len(velocities) > 0 else 0
 
@@ -400,7 +459,6 @@ class VisualizationController:
 
         torque_times = np.array(self.data_logger.torque_times)
 
-        # 动态创建子图
         axs = []
         for i in range(num_joints):
             if i == 0:
@@ -409,7 +467,6 @@ class VisualizationController:
                 ax = self.fig.add_subplot(num_joints, 1, i+1, sharex=axs[0])
             axs.append(ax)
 
-        # 绘制每个关节的数据
         for i, ax in enumerate(axs):
             joint_idx = start_idx + i
 
@@ -418,13 +475,11 @@ class VisualizationController:
 
             ax2 = ax.twinx()
 
-            # 绘制期望和实际角度（左轴）
             line1, = ax.plot(joint_times, target_pos, 'r--', linewidth=1.5,
                             label='期望角度', alpha=0.8)
             line2, = ax.plot(joint_times, actual_pos, 'b-', linewidth=2.0,
                             label='实际角度', alpha=0.8)
 
-            # 绘制力矩（右轴）
             if len(torque_times) > 0:
                 torques = np.array([data[joint_idx] for data in self.data_logger.joint_torques])
                 if len(torque_times) > 5000:
@@ -446,7 +501,6 @@ class VisualizationController:
             if i == num_joints - 1:
                 ax.set_xlabel('时间 (秒)', fontsize=9)
 
-            # 计算误差统计
             if len(actual_pos) > 0:
                 tracking_error = np.mean(np.abs(actual_pos - target_pos))
                 max_torque = np.max(np.abs(torques)) if len(torque_times) > 0 else 0
@@ -457,7 +511,6 @@ class VisualizationController:
                        verticalalignment='top',
                        bbox=dict(boxstyle='round', facecolor='lightyellow', alpha=0.7))
 
-            # 图例（仅第一个子图显示）
             if i == 0:
                 lines = [line1, line2]
                 labels = ['期望角度', '实际角度']
@@ -474,33 +527,28 @@ class VisualizationController:
                    fontsize=14, color='gray', transform=ax.transAxes)
             return
 
-        # 取第一个几何体的数据
         for geom_name, forces in self.data_logger.contact_forces.items():
             if not forces['time']:
                 continue
 
             times_array = np.array(forces['time'])
-            fx_array = np.array(forces['fx'])
-            fz_array = np.array(forces['fz'])
+            fx_array = -np.array(forces['fx'])
+            fz_array = -np.array(forces['fz'])
 
-            # 选择分析时间段
             mask = (times_array >= self.analysis_start_time) & (times_array <= self.analysis_end_time)
             if np.sum(mask) == 0:
                 continue
 
             analysis_times = times_array[mask] - self.analysis_start_time
             analysis_fx = fx_array[mask]
-            analysis_fz = -fz_array[mask]
+            analysis_fz = fz_array[mask]
 
-            # 计算XZ合力
             analysis_fxz_magnitude = np.sqrt(analysis_fx**2 + analysis_fz**2)
             analysis_fxz_angle = np.degrees(np.arctan2(analysis_fz, analysis_fx))
 
             max_fx = np.max(np.abs(analysis_fx))
             max_fz = np.max(np.abs(analysis_fz))
             max_fxz = np.max(analysis_fxz_magnitude)
-            mean_fx = np.mean(analysis_fx)
-            mean_fz = np.mean(analysis_fz)
             mean_fxz = np.mean(analysis_fxz_magnitude)
 
             # 计算冲量
@@ -508,7 +556,7 @@ class VisualizationController:
             if np.sum(impulse_mask) >= 2:
                 impulse_times = times_array[impulse_mask]
                 impulse_fx = fx_array[impulse_mask]
-                impulse_fz = -fz_array[impulse_mask]
+                impulse_fz = fz_array[impulse_mask]
 
                 time_steps = np.diff(impulse_times)
                 fx_mid = (impulse_fx[:-1] + impulse_fx[1:]) / 2
@@ -520,26 +568,20 @@ class VisualizationController:
             else:
                 impulse_x = impulse_z = impulse_magnitude = 0
 
-            # 子图1: X和Z方向力随时间变化
+            # 子图1
             ax1 = self.fig.add_subplot(3, 1, 1)
-
-            ax1.plot(analysis_times, analysis_fx, 'b-',
-                    label='Fx (水平力)', linewidth=2, alpha=0.8)
-            ax1.plot(analysis_times, analysis_fz, 'r-',
-                    label='Fz (垂直力)', linewidth=2, alpha=0.8)
+            ax1.plot(analysis_times, analysis_fx, 'b-', label='Fx (水平力)', linewidth=2, alpha=0.8)
+            ax1.plot(analysis_times, analysis_fz, 'r-', label='Fz (垂直力)', linewidth=2, alpha=0.8)
 
             impulse_start_rel = self.impulse_start - self.analysis_start_time
             impulse_end_rel = self.impulse_end - self.analysis_start_time
             ax1.axvspan(impulse_start_rel, impulse_end_rel, alpha=0.2, color='yellow',
                        label=f'冲量区间 ({self.impulse_start:.2f}-{self.impulse_end:.2f}s)')
-
             ax1.axhline(y=0, color='black', linestyle='--', linewidth=0.8, alpha=0.5)
-
             ax1.set_ylabel('力 (N)', fontsize=12)
             ax1.set_title(f'X和Z方向地面反作用力 ({geom_name})', fontsize=14, fontweight='bold')
             ax1.legend(loc='upper right', fontsize=10)
             ax1.grid(True, alpha=0.3)
-
             ax1.text(0.02, 0.98,
                     f'Max |Fx|: {max_fx:.2f}N\nMax |Fz|: {max_fz:.2f}N\n'
                     f'Ix = {impulse_x:.4f} N·s\nIz = {impulse_z:.4f} N·s',
@@ -547,12 +589,9 @@ class VisualizationController:
                     verticalalignment='top',
                     bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
 
-            # 子图2: XZ合力方向随时间变化
+            # 子图2
             ax2 = self.fig.add_subplot(3, 1, 2)
-
-            ax2.plot(analysis_times, analysis_fxz_angle, 'g-',
-                    label='合力方向角度', linewidth=2, alpha=0.8)
-
+            ax2.plot(analysis_times, analysis_fxz_angle, 'g-', label='合力方向角度', linewidth=2, alpha=0.8)
             ax2.axhline(y=0, color='gray', linestyle=':', linewidth=1, alpha=0.7, label='0° (纯水平)')
             ax2.axhline(y=90, color='orange', linestyle=':', linewidth=1, alpha=0.7, label='90° (垂直向上)')
             ax2.axhline(y=-90, color='orange', linestyle=':', linewidth=1, alpha=0.7, label='-90° (垂直向下)')
@@ -560,18 +599,14 @@ class VisualizationController:
             angle_range = max(abs(np.min(analysis_fxz_angle)), abs(np.max(analysis_fxz_angle)))
             y_limit = max(angle_range * 1.1, 180)
             ax2.set_ylim(-y_limit, y_limit)
-
             ax2.set_ylabel('角度 (度)', fontsize=12)
             ax2.set_title('XZ合力方向', fontsize=14, fontweight='bold')
             ax2.legend(loc='upper right', fontsize=9, ncol=2)
             ax2.grid(True, alpha=0.3)
-
             ax2.fill_between(analysis_times, 0, analysis_fxz_angle,
-                           where=(analysis_fxz_angle > 0),
-                           color='red', alpha=0.2)
+                           where=(analysis_fxz_angle > 0), color='red', alpha=0.2)
             ax2.fill_between(analysis_times, 0, analysis_fxz_angle,
-                           where=(analysis_fxz_angle < 0),
-                           color='blue', alpha=0.2)
+                           where=(analysis_fxz_angle < 0), color='blue', alpha=0.2)
 
             mean_angle = np.mean(analysis_fxz_angle)
             std_angle = np.std(analysis_fxz_angle)
@@ -580,27 +615,20 @@ class VisualizationController:
                     verticalalignment='top',
                     bbox=dict(boxstyle='round', facecolor='lightgreen', alpha=0.5))
 
-            # 子图3: XZ合力大小随时间变化
+            # 子图3
             ax3 = self.fig.add_subplot(3, 1, 3)
-
-            ax3.plot(analysis_times, analysis_fxz_magnitude, 'm-',
-                    label='XZ合力大小', linewidth=2.5, alpha=0.8)
-
+            ax3.plot(analysis_times, analysis_fxz_magnitude, 'm-', label='XZ合力大小', linewidth=2.5, alpha=0.8)
             ax3.axhline(y=mean_fxz, color='blue', linestyle='--', linewidth=1.5, alpha=0.7,
                        label=f'平均力: {mean_fxz:.2f}N')
             ax3.axhline(y=max_fxz, color='red', linestyle='--', linewidth=1.5, alpha=0.7,
                        label=f'最大力: {max_fxz:.2f}N')
-
-            ax3.fill_between(analysis_times, 0, analysis_fxz_magnitude,
-                           color='purple', alpha=0.15)
-
+            ax3.fill_between(analysis_times, 0, analysis_fxz_magnitude, color='purple', alpha=0.15)
             ax3.set_xlabel('时间 (s)', fontsize=12)
             ax3.set_ylabel('合力大小 (N)', fontsize=12)
             ax3.set_title(f'XZ合力大小 (平均速度: {self.avg_velocity:.3f} m/s)',
                          fontsize=14, fontweight='bold')
             ax3.legend(loc='upper right', fontsize=10)
             ax3.grid(True, alpha=0.3)
-
             ax3.text(0.02, 0.98,
                     f'峰值力: {max_fxz:.2f}N\n平均力: {mean_fxz:.2f}N\n'
                     f'力波动: {np.std(analysis_fxz_magnitude):.2f}N\n'
@@ -609,7 +637,6 @@ class VisualizationController:
                     verticalalignment='top',
                     bbox=dict(boxstyle='round', facecolor='lightyellow', alpha=0.5))
 
-            # 只处理第一个几何体
             break
 
 
