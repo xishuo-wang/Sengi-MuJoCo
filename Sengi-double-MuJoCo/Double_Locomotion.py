@@ -7,7 +7,7 @@ import mujoco_py
 import numpy as np
 import time
 from datetime import datetime
-from Data_Visualization import DataLogger, show_visualization
+from Double_Data_Visualization import DataLogger, show_visualization
 
 
 # ==================== 配置参数 ====================
