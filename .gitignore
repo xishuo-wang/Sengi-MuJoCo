@@ -1,9 +1,9 @@
-.vscode/
-.Code./
-.Figure_SR/
+vscode/
+Code./
+Figure_SR/
 
-.Sengi-double-MuJoCo/.vscode
-.Sengi-double-MuJoCo/__pycache__
+Sengi-double-MuJoCo/.vscode
+Sengi-double-MuJoCo/__pycache__
 
-.Sengi-single-MuJoCo/.vscode
-.Sengi-single-MuJoCo/__pycache__
+Sengi-single-MuJoCo/.vscode
+Sengi-single-MuJoCo/__pycache__
