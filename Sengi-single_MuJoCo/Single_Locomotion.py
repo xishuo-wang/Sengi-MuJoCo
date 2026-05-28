@@ -41,7 +41,7 @@ OPTIMAL_A_LEGH_KNEE = 0.1
 OPTIMAL_PHASE_LAG = np.pi / 20 * 6
 
 # 仿真参数
-INITIAL_PHASE_OFFSET = 0.53 / F
+INITIAL_PHASE_OFFSET = 0.5 / F
 HOLD_TIME = 0.5
 TOTAL_TIME = 5 + HOLD_TIME
 HIGH_LEVEL_FREQ = 240
@@ -201,46 +201,38 @@ def run_single_simulation_with_viewer(save_data=True):
     if not hindleg_3_geom_names:
         hindleg_3_geom_names = ['hindleg_3_geom']
 
-    # 运行仿真
-    current_time = 0.0
-    last_high_level_time = 0.0
-    num_joints = len(JOINT_NAMES)
-
-    high_level_target_pos, high_level_target_vel = get_all_joint_targets(
-        INITIAL_PHASE_OFFSET, sin_params, num_joints
-    )
-
     sim_step = 0
     start_time = time.time()
     force_record_interval = int(0.001 / dt)
 
     current_time = 0.0
-    last_high_level_time = 0.0
+    last_high_level_time = -HIGH_LEVEL_DT  # 确保首次进入时触发记录
     num_joints = len(JOINT_NAMES)
 
-    hold_target_pos, _ = get_all_joint_targets(INITIAL_PHASE_OFFSET, sin_params, num_joints)
+    # 初始化目标变量
+    target_pos = initial_joint_pos.copy()
+    target_vel = np.zeros(num_joints)
 
     try:
         while current_time < TOTAL_TIME:
             current_pos = sim.data.qpos[joint_pos_ids].copy()
             current_vel = sim.data.qvel[joint_vel_ids].copy()
 
-            # 判断当前阶段
+            # 判断当前阶段，更新目标位置
             if current_time < HOLD_TIME:
                 # 阶段1: 保持静止
-                target_pos = hold_target_pos
+                target_pos = initial_joint_pos.copy()
                 target_vel = np.zeros(num_joints)
             else:
                 # 阶段2: 正常运动
-                if current_time - last_high_level_time >= HIGH_LEVEL_DT - 1e-9 or current_time == HOLD_TIME:
-                    last_high_level_time = current_time
+                if current_time - last_high_level_time >= HIGH_LEVEL_DT - 1e-9:
                     motion_time = current_time - HOLD_TIME + INITIAL_PHASE_OFFSET
                     target_pos, target_vel = get_all_joint_targets(
                         motion_time, sin_params, num_joints
                     )
 
-            # 高层控制更新时的数据记录
-            if current_time - last_high_level_time >= HIGH_LEVEL_DT - 1e-9 or current_time == 0:
+            # 记录高层控制数据（按控制频率记录）
+            if current_time - last_high_level_time >= HIGH_LEVEL_DT - 1e-9:
                 data_logger.record_high_level_data(
                     current_time, target_pos, current_pos, current_vel
                 )
@@ -251,7 +243,7 @@ def run_single_simulation_with_viewer(save_data=True):
             for i in range(min(len(torque), sim.model.nu)):
                 sim.data.ctrl[i] = torque[i]
 
-            # 记录数据
+            # 记录力矩数据（每步记录）
             data_logger.record_torque_data(current_time, torque)
 
             current_base_x = sim.data.body_xpos[base_link_id][0]

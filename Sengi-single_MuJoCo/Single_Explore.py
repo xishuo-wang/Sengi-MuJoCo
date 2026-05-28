@@ -41,8 +41,9 @@ A_SPINE = -0.7
 A_LEGF_HIP = -0.25
 
 # 仿真参数
-INITIAL_PHASE_OFFSET = 0.53 / F  
-TOTAL_TIME = 4.0
+INITIAL_PHASE_OFFSET = 0.5 / F  
+HOLD_TIME = 0.5
+TOTAL_TIME = 4 + HOLD_TIME
 HIGH_LEVEL_FREQ = 240
 HIGH_LEVEL_DT = 1.0 / HIGH_LEVEL_FREQ
 
@@ -147,35 +148,44 @@ def run_single_simulation(args):
         times = []
         max_pitch_abs = 0.0  # 记录最大绝对俯仰角
 
-        # 运行仿真
         current_time = 0.0
-        last_high_level_time = 0.0
+        last_high_level_time = -HIGH_LEVEL_DT  # 确保首次进入时触发记录
         num_joints = len(JOINT_NAMES)
 
-        high_level_target_pos, high_level_target_vel = get_all_joint_targets(0, sin_params, num_joints)
+        # 初始化目标变量
+        hold_target_pos = initial_joint_pos.copy()
+        target_pos = hold_target_pos
+        target_vel = np.zeros(num_joints)
+        high_level_target_pos = hold_target_pos
+        high_level_target_vel = np.zeros(num_joints)
 
         while current_time < TOTAL_TIME:
             current_pos = sim.data.qpos[joint_pos_ids].copy()
             current_vel = sim.data.qvel[joint_vel_ids].copy()
 
-            # 高层控制更新
-            if current_time - last_high_level_time >= HIGH_LEVEL_DT - 1e-9 or current_time == 0:
-                last_high_level_time = current_time
-                trajectory_time = current_time + INITIAL_PHASE_OFFSET
-                high_level_target_pos, high_level_target_vel = get_all_joint_targets(
-                    trajectory_time, sin_params, num_joints
-                )
+            if current_time < HOLD_TIME:
+                # 阶段1: 保持静止
+                target_pos = hold_target_pos
+                target_vel = np.zeros(num_joints)
+            else:
+                # 阶段2: 正常运动
+                if current_time - last_high_level_time >= HIGH_LEVEL_DT - 1e-9 or current_time == HOLD_TIME:
+                    last_high_level_time = current_time
+                    motion_time = current_time - HOLD_TIME + INITIAL_PHASE_OFFSET
+                    target_pos, target_vel = get_all_joint_targets(
+                        motion_time, sin_params, num_joints
+                    )
 
-                # 获取俯仰角并更新最大值
-                base_rotmat = sim.data.body_xmat[base_link_id].reshape(3, 3)
-                pitch = np.arctan2(-base_rotmat[2, 0], 
-                                   np.sqrt(base_rotmat[0, 0]**2 + base_rotmat[1, 0]**2))
-                pitch_abs = abs(np.degrees(pitch))
-                if pitch_abs > max_pitch_abs:
-                    max_pitch_abs = pitch_abs
+                    # 获取俯仰角并更新最大值
+                    base_rotmat = sim.data.body_xmat[base_link_id].reshape(3, 3)
+                    pitch = np.arctan2(-base_rotmat[2, 0],
+                                       np.sqrt(base_rotmat[0, 0]**2 + base_rotmat[1, 0]**2))
+                    pitch_abs = abs(np.degrees(pitch))
+                    if pitch_abs > max_pitch_abs:
+                        max_pitch_abs = pitch_abs
 
             # 应用PD控制
-            torque = PDcontrol(high_level_target_pos, high_level_target_vel, current_pos, current_vel)
+            torque = PDcontrol(target_pos, target_vel, current_pos, current_vel)
             for i in range(min(len(torque), sim.model.nu)):
                 sim.data.ctrl[i] = torque[i]
 
@@ -191,8 +201,8 @@ def run_single_simulation(args):
 
         # 计算平均速度（1s-4s）
         if len(times) > 1:
-            idx_1s = np.argmin(np.abs(np.array(times) - 1.0))
-            idx_4s = np.argmin(np.abs(np.array(times) - 4.0))
+            idx_1s = np.argmin(np.abs(np.array(times) - 1.0 - HOLD_TIME))
+            idx_4s = np.argmin(np.abs(np.array(times) - 4.0 - HOLD_TIME))
 
             pos_1s = base_x_positions[idx_1s]
             pos_4s = base_x_positions[idx_4s]
