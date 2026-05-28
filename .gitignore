@@ -4,10 +4,12 @@ Figure_SR/
 
 Sengi-double-MuJoCo/.vscode
 Sengi-double-MuJoCo/__pycache__
-Sengi-double-MuJoCo/Data_Locomotion
-Sengi-double-MuJoCo/Data_Explore
+Sengi-double-MuJoCo/Data_Locomotion/
+Sengi-double-MuJoCo/Data_Explore/
+Sengi-double-MuJoCo/Readme.txt
 
 Sengi-single-MuJoCo/.vscode
 Sengi-single-MuJoCo/__pycache__
-Sengi-single-MuJoCo/Data_Locomotion
-Sengi-single-MuJoCo/Data_Explore
+Sengi-single-MuJoCo/Data_Locomotion/
+Sengi-single_MuJoCo/Data_Explore/
+Sengi-single-MuJoCo/Readme.txt

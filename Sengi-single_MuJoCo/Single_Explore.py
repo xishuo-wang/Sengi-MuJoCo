@@ -33,11 +33,11 @@ JOINT_NAMES = [
 KP = 2
 KD = 0.1
 TOR = 0.5
-TOR_SPINE = TOR * 1.0
+TOR_SPINE = TOR * 1.5
 
 # 固定运动参数
-F = 3
-A_SPINE = -0.5
+F = 2.2
+A_SPINE = -0.7
 A_LEGF_HIP = -0.25
 
 # 仿真参数
@@ -52,7 +52,8 @@ FIXED_NUM_THREADS = 8
 # 参数搜索范围
 A_LEGH_HIP_RANGE = np.arange(0, 1.41, 0.1)
 A_LEGH_KNEE_RANGE = np.arange(0, 1.01, 0.1)
-PHASE_LAG_RANGE = np.arange(-np.pi, np.pi + np.pi/20, np.pi/20)
+# PHASE_LAG_RANGE = np.arange(-np.pi, np.pi + np.pi/20, np.pi/20)
+PHASE_LAG_RANGE = np.arange(-np.pi/2, np.pi/2 + np.pi/20, np.pi/20)
 
 
 # ==================== 工具函数 ====================

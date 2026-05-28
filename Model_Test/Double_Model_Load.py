@@ -20,7 +20,7 @@ for name in joint_names:
     qpos_addr = sim.model.jnt_qposadr[joint_id]
     joint_indices.append(qpos_addr)
 print(joint_indices)
-initial_joint_pos = np.array([0, -0., -1.5, -1.5, 0, -0.85, -1., -1.])
+initial_joint_pos = np.array([0, -0.5, -1.2, -1.2, 0, -0.5, -1.2, -1.2])
 
 # PD控制器参数
 Kp = 2

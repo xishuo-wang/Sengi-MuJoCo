@@ -58,7 +58,7 @@ IMPULSE_START = ANALYSIS_START_TIME + 0.1
 IMPULSE_END = ANALYSIS_START_TIME + 0.2
 
 # 数据记录参数
-SAVE_DATA = True
+SAVE_DATA = False
 
 
 # ==================== 轨迹生成函数 ====================

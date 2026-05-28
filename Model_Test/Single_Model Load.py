@@ -56,7 +56,7 @@ current_time = 0.0
 while True:
     target_pos = initial_joint_pos.copy()
 
-    target_pos[5] = -1
+    target_pos[4] = -0
     torque = PDcontrol(target_pos)
     for i in range(sim.model.nu):
         sim.data.ctrl[i] = torque[i]
