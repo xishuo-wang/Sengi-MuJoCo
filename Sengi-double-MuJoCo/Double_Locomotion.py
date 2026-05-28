@@ -41,8 +41,9 @@ OPTIMAL_A_LEGH_KNEE = 0.8
 OPTIMAL_PHASE_LAG = -np.pi / 20 * 0
 
 # 仿真参数
-INITIAL_PHASE_OFFSET = 0.53 / F
-TOTAL_TIME = 5
+INITIAL_PHASE_OFFSET = 0.55 / F
+HOLD_TIME = 0.5
+TOTAL_TIME = 5 + HOLD_TIME
 HIGH_LEVEL_FREQ = 240
 HIGH_LEVEL_DT = 1.0 / HIGH_LEVEL_FREQ
 
@@ -52,7 +53,7 @@ VIEWER_WIDTH = 1200
 VIEWER_HEIGHT = 800
 
 # 接触力分析参数
-ANALYSIS_START_TIME = 0
+ANALYSIS_START_TIME = HOLD_TIME
 ANALYSIS_END_TIME = 5
 IMPULSE_START = ANALYSIS_START_TIME + 0.1
 IMPULSE_END = ANALYSIS_START_TIME + 0.2
@@ -216,23 +217,45 @@ def run_single_simulation_with_viewer(save_data=True):
     force_record_interval = int(0.001 / dt)
 
     try:
+        print(f"\n阶段1: 初始位置保持 {HOLD_TIME} 秒...")
+        current_time = 0.0
+        last_high_level_time = 0.0
+        num_joints = len(JOINT_NAMES)
+
+        # 保持阶段的目标位置（轨迹在偏移时间处的值）
+        hold_target_pos, _ = get_all_joint_targets(INITIAL_PHASE_OFFSET, sin_params, num_joints)
+
+        sim_step = 0
+        start_time = time.time()
+        force_record_interval = int(0.001 / dt)
+
         while current_time < TOTAL_TIME:
             current_pos = sim.data.qpos[joint_pos_ids].copy()
             current_vel = sim.data.qvel[joint_vel_ids].copy()
 
-            # 高层控制更新
+            # 判断当前阶段
+            if current_time < HOLD_TIME:
+                # 阶段1: 保持静止
+                target_pos = hold_target_pos
+                target_vel = np.zeros(num_joints)
+            else:
+                # 阶段2: 正常运动
+                if current_time - last_high_level_time >= HIGH_LEVEL_DT - 1e-9 or current_time == HOLD_TIME:
+                    last_high_level_time = current_time
+                    motion_time = current_time - HOLD_TIME + INITIAL_PHASE_OFFSET
+                    target_pos, target_vel = get_all_joint_targets(
+                        motion_time, sin_params, num_joints
+                    )
+
+            # 高层控制更新时的数据记录
             if current_time - last_high_level_time >= HIGH_LEVEL_DT - 1e-9 or current_time == 0:
-                last_high_level_time = current_time
-                trajectory_time = current_time + INITIAL_PHASE_OFFSET
-                high_level_target_pos, high_level_target_vel = get_all_joint_targets(
-                    trajectory_time, sin_params, num_joints
-                )
                 data_logger.record_high_level_data(
-                    current_time, high_level_target_pos, current_pos, current_vel
+                    current_time, target_pos, current_pos, current_vel
                 )
+                last_high_level_time = current_time
 
             # 应用PD控制
-            torque = PDcontrol(high_level_target_pos, high_level_target_vel, current_pos, current_vel)
+            torque = PDcontrol(target_pos, target_vel, current_pos, current_vel)
             for i in range(min(len(torque), sim.model.nu)):
                 sim.data.ctrl[i] = torque[i]
 
@@ -269,7 +292,7 @@ def run_single_simulation_with_viewer(save_data=True):
     elapsed_time = time.time() - start_time
 
     # 计算平均速度
-    avg_velocity = data_logger.calculate_average_velocity(1.0, 4.0)
+    avg_velocity = data_logger.calculate_average_velocity(HOLD_TIME + 1.0, HOLD_TIME + 4.0)
 
     # 打印结果
     print("\n" + "=" * 50)
