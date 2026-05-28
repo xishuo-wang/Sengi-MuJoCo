@@ -216,19 +216,13 @@ def run_single_simulation_with_viewer(save_data=True):
     start_time = time.time()
     force_record_interval = int(0.001 / dt)
 
+    current_time = 0.0
+    last_high_level_time = 0.0
+    num_joints = len(JOINT_NAMES)
+
+    hold_target_pos, _ = get_all_joint_targets(INITIAL_PHASE_OFFSET, sin_params, num_joints)
+
     try:
-        print(f"\n阶段1: 初始位置保持 {HOLD_TIME} 秒...")
-        current_time = 0.0
-        last_high_level_time = 0.0
-        num_joints = len(JOINT_NAMES)
-
-        # 保持阶段的目标位置（轨迹在偏移时间处的值）
-        hold_target_pos, _ = get_all_joint_targets(INITIAL_PHASE_OFFSET, sin_params, num_joints)
-
-        sim_step = 0
-        start_time = time.time()
-        force_record_interval = int(0.001 / dt)
-
         while current_time < TOTAL_TIME:
             current_pos = sim.data.qpos[joint_pos_ids].copy()
             current_vel = sim.data.qvel[joint_vel_ids].copy()
